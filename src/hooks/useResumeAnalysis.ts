@@ -2,6 +2,7 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
+import mammoth from "mammoth";
 
 // Set up the worker for pdf.js v3
 GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
@@ -36,7 +37,14 @@ async function extractTextFromPDF(file: File): Promise<string> {
   return textParts.join("\n\n");
 }
 
-// Extract text from text-based files
+// Extract text from DOCX using mammoth
+async function extractTextFromDOCX(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer });
+  return result.value;
+}
+
+// Extract text from files based on type
 async function extractTextFromFile(file: File): Promise<string | null> {
   // For text files, read as text
   if (file.type === "text/plain" || file.name.endsWith(".txt")) {
@@ -53,7 +61,6 @@ async function extractTextFromFile(file: File): Promise<string | null> {
     try {
       const text = await extractTextFromPDF(file);
       console.log("PDF text extracted, length:", text.length);
-      console.log("First 500 chars:", text.substring(0, 500));
       return text;
     } catch (error) {
       console.error("PDF extraction error:", error);
@@ -61,7 +68,26 @@ async function extractTextFromFile(file: File): Promise<string | null> {
     }
   }
   
-  // For DOCX files, we'd need additional handling - for now return null
+  // For DOCX files, use mammoth
+  if (
+    file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || 
+    file.name.endsWith(".docx")
+  ) {
+    try {
+      const text = await extractTextFromDOCX(file);
+      console.log("DOCX text extracted, length:", text.length);
+      return text;
+    } catch (error) {
+      console.error("DOCX extraction error:", error);
+      throw new Error("Failed to extract text from DOCX. Please ensure the file is a valid Word document.");
+    }
+  }
+
+  // For legacy DOC files (not supported by mammoth)
+  if (file.type === "application/msword" || file.name.endsWith(".doc")) {
+    throw new Error("Legacy .doc files are not supported. Please convert to .docx or PDF format.");
+  }
+  
   return null;
 }
 
