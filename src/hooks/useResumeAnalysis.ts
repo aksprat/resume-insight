@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import * as pdfjsLib from "pdfjs-dist";
+
+// Set up the worker for pdf.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface Question {
   question: string;
@@ -13,19 +17,23 @@ interface AnalysisResult {
   questions: Question[];
 }
 
-// Convert file to base64
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // Remove the data URL prefix (e.g., "data:application/pdf;base64,")
-      const base64 = result.split(",")[1];
-      resolve(base64);
-    };
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
+// Extract text from PDF using pdf.js
+async function extractTextFromPDF(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  
+  const textParts: string[] = [];
+  
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: any) => item.str)
+      .join(" ");
+    textParts.push(pageText);
+  }
+  
+  return textParts.join("\n\n");
 }
 
 // Extract text from text-based files
@@ -40,7 +48,20 @@ async function extractTextFromFile(file: File): Promise<string | null> {
     });
   }
   
-  // For PDFs and other binary formats, return null to indicate server-side parsing needed
+  // For PDFs, use pdf.js for proper text extraction
+  if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+    try {
+      const text = await extractTextFromPDF(file);
+      console.log("PDF text extracted, length:", text.length);
+      console.log("First 500 chars:", text.substring(0, 500));
+      return text;
+    } catch (error) {
+      console.error("PDF extraction error:", error);
+      throw new Error("Failed to extract text from PDF. Please ensure the PDF contains readable text.");
+    }
+  }
+  
+  // For DOCX files, we'd need additional handling - for now return null
   return null;
 }
 
@@ -55,17 +76,17 @@ export function useResumeAnalysis() {
     setResult(null);
 
     try {
-      // Try to extract text from file (works for text files)
+      // Extract text from file (now handles PDFs properly with pdf.js)
       const resumeText = await extractTextFromFile(file);
       
-      // For PDFs/binary files, send as base64
-      const fileBase64 = resumeText ? null : await fileToBase64(file);
+      if (!resumeText || resumeText.trim().length < 50) {
+        throw new Error("Could not extract enough text from the file. Please ensure your resume contains readable text.");
+      }
 
-      // Call the edge function (webhook is triggered server-side)
+      // Call the edge function with the extracted text
       const { data, error: fnError } = await supabase.functions.invoke("analyze-resume", {
         body: { 
           resumeText,
-          fileBase64,
           fileName: file.name,
           fileType: file.type,
           fileSize: file.size,
