@@ -8,47 +8,84 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Simple PDF text extraction - extracts readable text from PDF binary
+// Enhanced PDF text extraction - handles text streams and various encodings
 function extractTextFromPDFSimple(base64Data: string): string {
   try {
     const binaryString = atob(base64Data);
+    const textChunks: string[] = [];
     
-    // Extract readable ASCII text from PDF
-    const textMatches: string[] = [];
-    let currentText = "";
-    
-    for (let i = 0; i < binaryString.length; i++) {
-      const charCode = binaryString.charCodeAt(i);
+    // Method 1: Extract text between BT (begin text) and ET (end text) markers
+    const btEtRegex = /BT\s*([\s\S]*?)\s*ET/g;
+    let match;
+    while ((match = btEtRegex.exec(binaryString)) !== null) {
+      const textBlock = match[1];
+      // Extract text from Tj and TJ operators
+      const tjMatches = textBlock.match(/\(([^)]*)\)\s*Tj/g) || [];
+      const tJMatches = textBlock.match(/\[([^\]]*)\]\s*TJ/g) || [];
       
-      // Collect printable ASCII characters
-      if (charCode >= 32 && charCode <= 126) {
-        currentText += binaryString[i];
-      } else if (charCode === 10 || charCode === 13) {
-        if (currentText.trim().length > 3) {
-          textMatches.push(currentText.trim());
-        }
-        currentText = "";
+      for (const tj of tjMatches) {
+        const text = tj.match(/\(([^)]*)\)/)?.[1] || "";
+        if (text.length > 0) textChunks.push(text);
+      }
+      
+      for (const tJ of tJMatches) {
+        // TJ arrays contain strings in parentheses with kerning values
+        const strings = tJ.match(/\(([^)]*)\)/g) || [];
+        const combined = strings.map(s => s.slice(1, -1)).join("");
+        if (combined.length > 0) textChunks.push(combined);
       }
     }
     
-    // Add any remaining text
-    if (currentText.trim().length > 3) {
-      textMatches.push(currentText.trim());
+    // Method 2: Also look for text in stream objects (for compressed streams that were decoded)
+    const streamRegex = /stream\s*([\s\S]*?)\s*endstream/g;
+    while ((match = streamRegex.exec(binaryString)) !== null) {
+      const streamContent = match[1];
+      // Extract any readable text sequences (4+ chars)
+      const readableMatches = streamContent.match(/[A-Za-z][A-Za-z0-9\s.,@\-_'":;!?()]{3,}/g) || [];
+      for (const readable of readableMatches) {
+        if (readable.trim().length > 3 && !readable.match(/^(obj|endobj|stream|endstream|xref|trailer)$/i)) {
+          textChunks.push(readable.trim());
+        }
+      }
     }
     
-    // Filter out PDF commands and keep meaningful text
-    const meaningfulText = textMatches
-      .filter(text => {
-        // Filter out common PDF operators and short fragments
-        if (text.length < 4) return false;
-        if (/^[0-9.\s]+$/.test(text)) return false; // Just numbers
-        if (/^(Tf|Td|Tm|TJ|Tj|cm|re|f|q|Q|BT|ET|rg|RG|obj|endobj|stream|endstream)$/i.test(text)) return false;
-        if (text.startsWith("/") || text.startsWith("<<") || text.startsWith(">>")) return false; // PDF syntax
-        return true;
-      })
-      .join(" ");
+    // Method 3: Fallback - extract all printable ASCII sequences
+    if (textChunks.length < 10) {
+      let currentText = "";
+      for (let i = 0; i < binaryString.length; i++) {
+        const charCode = binaryString.charCodeAt(i);
+        if (charCode >= 32 && charCode <= 126) {
+          currentText += binaryString[i];
+        } else if (charCode === 10 || charCode === 13) {
+          if (currentText.trim().length > 4) {
+            // Filter out PDF commands
+            if (!currentText.match(/^[\d\s.]+$/) && 
+                !currentText.match(/^\/[A-Z]/i) &&
+                !currentText.startsWith("<<") &&
+                !currentText.startsWith(">>")) {
+              textChunks.push(currentText.trim());
+            }
+          }
+          currentText = "";
+        }
+      }
+      if (currentText.trim().length > 4) {
+        textChunks.push(currentText.trim());
+      }
+    }
     
-    return meaningfulText;
+    // Deduplicate and join
+    const uniqueChunks = [...new Set(textChunks)];
+    const result = uniqueChunks
+      .filter(chunk => chunk.length > 2)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    
+    console.log("PDF extraction result length:", result.length, "chunks:", uniqueChunks.length);
+    console.log("First 500 chars of extracted text:", result.substring(0, 500));
+    
+    return result;
   } catch (error) {
     console.error("PDF parsing error:", error);
     throw new Error("Failed to parse PDF file");
@@ -80,11 +117,17 @@ serve(async (req) => {
     }
     
     if (!textContent || typeof textContent !== "string" || textContent.trim().length < 50) {
+      console.error("Text extraction failed. Content length:", textContent?.length || 0);
       return new Response(
-        JSON.stringify({ error: "Could not extract enough text from the resume. Please ensure the file contains readable text content." }),
+        JSON.stringify({ 
+          error: "Could not extract enough text from the resume. Please ensure the file contains readable text content.",
+          debug: { extractedLength: textContent?.length || 0 }
+        }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+    
+    console.log("Resume text to analyze (first 1000 chars):", textContent.substring(0, 1000));
 
     // Trigger n8n webhook (server-to-server, no CORS issues)
     try {
