@@ -43,8 +43,24 @@ serve(async (req) => {
     if (!n8nResponse.ok) {
       const errorText = await n8nResponse.text();
       console.error("n8n webhook error:", n8nResponse.status, errorText);
+      
+      // Try to parse the error for more details
+      let errorMessage = "Failed to generate questions from workflow";
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMessage = errorJson.message || errorJson.error || errorMessage;
+      } catch {
+        // Use raw text if not JSON
+        if (errorText && errorText.length < 200) {
+          errorMessage = errorText;
+        }
+      }
+      
       return new Response(
-        JSON.stringify({ error: "Failed to generate questions from workflow" }),
+        JSON.stringify({ 
+          error: errorMessage,
+          details: "The n8n workflow encountered an error. Please check if the workflow is active and the LLM response is valid JSON."
+        }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
