@@ -127,10 +127,16 @@ export function useResumeAnalysis() {
         throw new Error(data.error);
       }
 
+      // Validate response format - n8n might return different structures
+      if (!data.questions || !Array.isArray(data.questions)) {
+        console.error("Invalid n8n response format:", data);
+        throw new Error(data.message || "The workflow did not return interview questions. Please check the n8n workflow configuration.");
+      }
+
       setResult(data);
       toast({
         title: "Analysis Complete!",
-        description: `Generated ${data.questions?.length || 0} interview questions`,
+        description: `Generated ${data.questions.length} interview questions`,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to analyze resume";

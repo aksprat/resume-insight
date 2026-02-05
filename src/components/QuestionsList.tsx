@@ -15,17 +15,20 @@ interface QuestionsListProps {
   candidateName?: string;
 }
 
-export function QuestionsList({ questions, candidateName }: QuestionsListProps) {
+export function QuestionsList({ questions = [], candidateName }: QuestionsListProps) {
   const [filter, setFilter] = useState<string>("all");
 
-  const categories = ["all", ...new Set(questions.map(q => q.category.toLowerCase()))];
+  // Defensive check for undefined/null questions
+  const safeQuestions = Array.isArray(questions) ? questions : [];
+  
+  const categories = ["all", ...new Set(safeQuestions.map(q => q.category.toLowerCase()))];
   
   const filteredQuestions = filter === "all" 
-    ? questions 
-    : questions.filter(q => q.category.toLowerCase() === filter);
+    ? safeQuestions 
+    : safeQuestions.filter(q => q.category.toLowerCase() === filter);
 
   const handleCopyAll = async () => {
-    const text = questions.map((q, i) => `${i + 1}. [${q.category}] ${q.question}`).join("\n\n");
+    const text = safeQuestions.map((q, i) => `${i + 1}. [${q.category}] ${q.question}`).join("\n\n");
     await navigator.clipboard.writeText(text);
     toast({
       title: "Copied!",
@@ -34,7 +37,7 @@ export function QuestionsList({ questions, candidateName }: QuestionsListProps) 
   };
 
   const handleExport = () => {
-    const text = questions.map((q, i) => `${i + 1}. [${q.category}] ${q.question}`).join("\n\n");
+    const text = safeQuestions.map((q, i) => `${i + 1}. [${q.category}] ${q.question}`).join("\n\n");
     const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -98,7 +101,7 @@ export function QuestionsList({ questions, candidateName }: QuestionsListProps) 
             {category.charAt(0).toUpperCase() + category.slice(1)}
             {category !== "all" && (
               <span className="ml-1.5 opacity-70">
-                ({questions.filter(q => q.category.toLowerCase() === category).length})
+                ({safeQuestions.filter(q => q.category.toLowerCase() === category).length})
               </span>
             )}
           </button>
@@ -120,7 +123,7 @@ export function QuestionsList({ questions, candidateName }: QuestionsListProps) 
 
       {/* Summary */}
       <div className="text-center text-sm text-muted-foreground pt-4">
-        Showing {filteredQuestions.length} of {questions.length} questions
+        Showing {filteredQuestions.length} of {safeQuestions.length} questions
       </div>
     </div>
   );
